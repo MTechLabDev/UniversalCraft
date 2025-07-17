@@ -52,6 +52,11 @@ jobs:
 
       - name: Build
         run: ./gradlew build --stacktrace
+        env:
+          NEXUS_URL: ${{ secrets.NEXUS_URL }}
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+
 
       - name: Publish
         run: ./gradlew publish --stacktrace

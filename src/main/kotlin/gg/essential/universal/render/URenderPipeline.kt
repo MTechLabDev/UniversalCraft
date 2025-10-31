@@ -86,7 +86,7 @@ class URenderPipeline private constructor(
     //$$     renderPass.setPipeline(mcRenderPipeline)
     //$$
         //#if MC>=12106
-        //$$ renderPass.drawIndexed(0, 0, builtBuffer.drawParameters.comp_751(), 1)
+        //$$ renderPass.drawIndexed(0, 0, builtBuffer.drawParameters.indexCount, 1)
         //#else
         //$$ renderPass.drawIndexed(0, builtBuffer.drawParameters.indexCount())
         //#endif
@@ -112,6 +112,29 @@ class URenderPipeline private constructor(
 
     internal fun bind() {
         shader?.bind(glState.blendState)
+
+        // These seemingly pointless calls are used to bypass the builtin `GlBlendState` applied by Minecraft's
+        // `ShaderProgram` class right before the actual draw call (so no way for us to change it afterwards) on these
+        // versions.
+        // This is so we can apply the BlendState of this URenderPipeline, even when using a pre-existing ShaderProgram
+        // (such as all the default programs) which has a different builtin `GlBlendState`.
+        // This works by exploiting one of the (many) bugs of `GlBlendState`, namely that it is lazy in that it does
+        // not update anything if the previously active blend state matches the new one. In general that behavior is
+        // wrong because there's plenty other things which update the global GL state but we use this to our advantage
+        // here: We'll apply its GlBlendState now, and then revert the global GL state to our expected state, so that
+        // later when MC calls `ShaderProgram.bind` right before the actual draw, its `GlBlendState.enable` call will
+        // no-op and our desired blend state will stay active.
+        // (Prior to 1.17, we only support the fixed-function pipeline and our own shader class which we call with
+        //  `skipBlendState = true`, so it doesn't mess with the global blend state at all)
+        // (On 1.21+, MC's `GlBlendState` is still broken, but `ShaderProgram` no longer applies it)
+        //#if MC>=11700 && MC<12100
+        //$$ RenderSystem.getShader()?.let { shaderProgram ->
+        //$$     val prevBlendState = BlendState.active()
+        //$$     shaderProgram.bind()
+        //$$     shaderProgram.unbind()
+        //$$     UGraphics.Globals.blendState(prevBlendState)
+        //$$ }
+        //#endif
     }
 
     internal fun unbind() {
@@ -351,6 +374,23 @@ class URenderPipeline private constructor(
             //$$
             //$$             transformer.samplers.forEach { withSampler(it) }
             //$$             transformer.uniforms.forEach { withUniform(it.key, it.value.mc) }
+            //$$
+            //$$             // ShaderProgram calls glBindAttribLocation using the names in the VertexFormat so we need to
+            //$$             // construct a custom one based on the original but with our prefixed names
+            //$$             val builder = VertexFormat.builder()
+            //$$             var expectedOffset = 0
+            //$$             format.elements.mapIndexed { index, element ->
+            //$$                 val offset = format.getOffset(element)
+            //$$                 val padding = offset - expectedOffset
+            //$$                 if (padding > 0) {
+            //$$                     expectedOffset += padding
+            //$$                     builder.padding(padding)
+            //$$                 }
+            //$$                 expectedOffset += element.byteSize()
+            //$$                 val name = transformer.attributes.getOrNull(index) ?: format.getElementName(element)
+            //$$                 builder.add(name, element)
+            //$$             }
+            //$$             withVertexFormat(builder.build(), drawMode.mcMode)
             //$$         }
             //$$         is ShaderSupplier.Mc -> {
             //$$             withVertexShader(shader.vert)
@@ -448,9 +488,14 @@ class URenderPipeline private constructor(
                     polygonOffset = polygonOffset.first != 0f || polygonOffset.second != 0f,
                     polygonOffsetFactor = polygonOffset.first,
                     polygonOffsetUnits = polygonOffset.second,
+                    shadeModel = GL11.GL_SMOOTH,
                     alphaTest = true,
                     alphaTestFunc = GL11.GL_ALWAYS,
                     alphaTestRef = 0f,
+                    colorR = 1f,
+                    colorG = 1f,
+                    colorB = 1f,
+                    colorA = 1f,
                     //#if MC>=11700
                     //$$ texture2DStates = mutableListOf(),
                     //#else

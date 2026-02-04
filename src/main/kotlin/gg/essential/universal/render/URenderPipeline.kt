@@ -30,7 +30,6 @@ import net.minecraft.util.ResourceLocation
 //$$ import net.minecraft.client.gl.UniformType
 //$$ import net.minecraft.client.render.BuiltBuffer
 //$$ import org.apache.commons.codec.digest.DigestUtils
-//$$ import java.util.function.BiFunction
 //#else
 import gg.essential.universal.shader.UShader
 import gg.essential.universal.vertex.UBuiltBufferInternal
@@ -51,6 +50,10 @@ import net.minecraft.client.renderer.WorldVertexBufferUploader
 //$$ import net.minecraft.client.render.Shader
 //$$ import java.util.function.Supplier
 //#endif
+//#if MC<12100
+//$$ import net.minecraft.client.gl.GlBlendState
+//$$ import java.lang.invoke.MethodHandles
+//#endif
 //#else
 import gg.essential.universal.shader.GlShader
 import net.minecraft.client.renderer.vertex.VertexFormatElement
@@ -62,6 +65,14 @@ import net.minecraft.client.renderer.vertex.VertexFormatElement
 
 //#endif
 
+//#if MC>=12105 && !STANDALONE
+//#if MC>=12111
+//$$ typealias ShaderSourceGetter = net.minecraft.client.gl.ShaderSourceGetter
+//#else
+//$$ typealias ShaderSourceGetter = java.util.function.BiFunction<Identifier, ShaderType, String?>
+//#endif
+//#endif
+
 class URenderPipeline private constructor(
     private val id: ResourceLocation,
     internal val format: VertexFormat,
@@ -69,7 +80,7 @@ class URenderPipeline private constructor(
     //$$ private val drawMode: DrawMode,
     //#endif
     //#if MC>=12105 && !STANDALONE
-    //$$ private var shaderSourceGetter: BiFunction<Identifier, ShaderType, String?>?,
+    //$$ private var shaderSourceGetter: ShaderSourceGetter?,
     //$$ internal val mcRenderPipeline: RenderPipeline,
     //#else
     private val shader: ShaderSupplier?,
@@ -129,10 +140,24 @@ class URenderPipeline private constructor(
         // (On 1.21+, MC's `GlBlendState` is still broken, but `ShaderProgram` no longer applies it)
         //#if MC>=11700 && MC<12100
         //$$ RenderSystem.getShader()?.let { shaderProgram ->
+        //$$     // Capture actual desired blend state to restore afterwards
         //$$     val prevBlendState = BlendState.active()
-        //$$     shaderProgram.bind()
-        //$$     shaderProgram.unbind()
-        //$$     UGraphics.Globals.blendState(prevBlendState)
+        //$$     // This seemingly pointless change of active blend state here is necessary because of another bug in
+        //$$     // GlBlendState: It'll only update its global `activeBlendState` when the blend state is enabled or disabled
+        //$$     // but not when merely the blend function or one of its parameters is changed. So we need to make sure
+        //$$     // we enable a blend state which is the opposite of the blend state of the shader before we enable that one.
+        //$$     // We need to do two calls because we don't know the state of the current `activeBlendState`.
+        //$$     if (shaderProgram.glBlendState.isBlendDisabled) {
+        //$$         BlendState.DISABLED.mc.enable()
+        //$$         BlendState.ALPHA.mc.enable()
+        //$$     } else {
+        //$$         BlendState.ALPHA.mc.enable()
+        //$$         BlendState.DISABLED.mc.enable()
+        //$$     }
+        //$$     // Enable shader's GlBlendState so it becomes the `GlBlendState.activeBlendState`
+        //$$     shaderProgram.glBlendState.enable()
+        //$$     // Restore desired blend state
+        //$$     prevBlendState.activateWithoutChangingMcBlendState()
         //$$ }
         //#endif
     }
@@ -212,7 +237,7 @@ class URenderPipeline private constructor(
             //$$     return
             //$$ }
             //#endif
-            null -> UGraphics.bindTexture(index, glId)
+            null -> UGraphics.Globals.bindTexture(index, glId)
         }
     }
     //#endif
@@ -347,7 +372,7 @@ class URenderPipeline private constructor(
     ) : Builder, BuilderProps by BuilderPropsImpl() {
         override fun build(): URenderPipeline {
             //#if MC>=12105 && !STANDALONE
-            //$$ var shaderSourceGetter: BiFunction<Identifier, ShaderType, String?>? = null
+            //$$ var shaderSourceGetter: ShaderSourceGetter? = null
             //$$ var mcRenderPipeline = RenderPipeline.builder().apply {
             //$$     withLocation(id)
             //$$     withVertexFormat(format, drawMode.mcMode)
@@ -361,7 +386,7 @@ class URenderPipeline private constructor(
             //$$             val vertId = Identifier.of("universalcraft", "shader/generated/" + DigestUtils.sha1Hex(transformedVertSource).lowercase())
             //$$             val fragId = Identifier.of("universalcraft", "shader/generated/" + DigestUtils.sha1Hex(transformedFragSource).lowercase())
             //$$
-            //$$             shaderSourceGetter = BiFunction { id: Identifier, type: ShaderType ->
+            //$$             shaderSourceGetter = ShaderSourceGetter { id: Identifier, type: ShaderType ->
             //$$                 when (id) {
             //$$                     vertId -> transformedVertSource
             //$$                     fragId -> transformedFragSource
@@ -520,6 +545,22 @@ class URenderPipeline private constructor(
         //$$ val isRequired = true
         //#else
         val isRequired = false
+        //#endif
+
+        //#if MC>=11700 && MC<12100
+        //$$ private val Shader_glBlendState: (Shader) -> GlBlendState by lazy {
+        //$$     try {
+        //$$         val field = Shader::class.java.declaredFields
+        //$$             .first { it.type == GlBlendState::class.java }
+        //$$         field.isAccessible = true
+        //$$         val handle = MethodHandles.lookup().unreflectGetter(field)
+        //$$         return@lazy { shader: Shader -> handle.invoke(shader) as GlBlendState }
+        //$$     } catch (e: Exception) {
+        //$$         e.printStackTrace()
+        //$$         return@lazy { GlBlendState() }
+        //$$     }
+        //$$ }
+        //$$ private val Shader.glBlendState: GlBlendState get() = Shader_glBlendState(this)
         //#endif
 
         //#if !STANDALONE
